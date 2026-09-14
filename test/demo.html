@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Price Localizer – demo page</title>
+    <style>
+      body { font: 15px/1.5 system-ui, sans-serif; max-width: 760px; margin: 24px auto; padding: 0 16px; color: #222; }
+      section { border: 1px solid #ddd; border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
+      h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #888; margin: 0 0 6px; }
+      .controls button { margin: 0 6px 6px 0; }
+      .red-price { color: #c00; font-weight: 700; }
+      .a-offscreen { position: absolute; left: -9999px; }
+      .a-price { font-size: 28px; color: #0f1111; }
+      .a-price-symbol, .a-price-fraction { font-size: 14px; vertical-align: top; position: relative; top: 4px; color: #0f1111; }
+      .a-price-decimal { display: none; }
+      .cents { font-size: 26px; }
+    </style>
+  </head>
+  <body>
+    <div class="controls">
+      <button data-target="EGP">Target EGP</button>
+      <button data-target="EUR">Target EUR</button>
+      <button data-target="USD">Target USD</button>
+      <button id="toggle">Toggle enabled</button>
+      <button id="addItem">Add item</button>
+    </div>
+
+    <div id="static">
+      <section><h2>Simple</h2>
+        <span class="price">$19.99</span>
+        <p>Only $1,299.00 today, was $1,499.00.</p>
+        <span class="red-price">€45,00</span> (site CSS makes this red)
+      </section>
+
+      <section><h2>Split across elements</h2>
+        <span class="a-price"><span class="a-offscreen">$24.99</span><span aria-hidden="true"><span class="a-price-symbol">$</span><span class="a-price-whole">24<span class="a-price-decimal">.</span></span><span class="a-price-fraction">99</span></span></span>
+        &nbsp;&nbsp;
+        <span class="cents">$19<sup>99</sup></span>
+      </section>
+
+      <section><h2>Ranges, magnitudes, other currencies</h2>
+        <p>Budget $10–20 · £5m deal · raised $1.2 billion</p>
+        <p>1.234,56 € · ¥1,200 · ₹2,49,999 · R$ 1.500,00 · 99 SAR · CHF 1'250.50</p>
+      </section>
+
+      <section><h2>Already in EGP (unchanged when target is EGP)</h2>
+        <p>250 ج.م · LE 1,500 · EGP 300</p>
+      </section>
+
+      <section><h2>Must not change</h2>
+        <p>TRY 30 DAYS FREE · AMD 5600X · version 1.2.3</p>
+        <code>cost = $99</code>
+        <input value="$50" />
+        <textarea>$75</textarea>
+        <div contenteditable="true">Editable $30</div>
+      </section>
+    </div>
+
+    <section><h2>Dynamic</h2>
+      <p>Live price: <b id="live">$10.00</b></p>
+      <p id="sentence">Cart total: $5.00 for 1 item</p>
+      <ul id="list"><li>Starter — $4.99</li></ul>
+      <shadow-price></shadow-price>
+    </section>
+
+    <script>
+      const FIXTURE = {
+        base: 'USD', provider: 'Fixture', providerUrl: 'about:blank',
+        updatedAt: Date.now() - 3600e3, nextUpdateAt: Date.now() + 20 * 3600e3, fetchedAt: Date.now(),
+        rates: { USD: 1, EGP: 51.378, EUR: 0.862246, GBP: 0.739483, JPY: 153.61, INR: 95.61, SAR: 3.75, BRL: 5.4, CHF: 0.8 },
+      };
+      let settings = { enabled: true, targetCurrency: 'EGP', color: '#16a34a' };
+      const listeners = [];
+      const stub = {
+        storage: {
+          sync: { get: async () => ({ settings }) },
+          local: { get: async () => ({ rates: FIXTURE }) },
+          onChanged: { addListener: (fn) => listeners.push(fn) },
+        },
+        runtime: { sendMessage: async () => ({}), onMessage: { addListener() {} } },
+      };
+      Object.defineProperty(window, 'chrome', { value: stub, configurable: true, writable: true });
+      window.setSettings = (patch) => {
+        const oldValue = settings;
+        settings = { ...settings, ...patch };
+        listeners.forEach((fn) => fn({ settings: { oldValue, newValue: settings } }, 'sync'));
+      };
+
+      customElements.define('shadow-price', class extends HTMLElement {
+        constructor() { super(); this.attachShadow({ mode: 'open' }).innerHTML = '<p>In shadow DOM: <span>$12.50</span></p>'; }
+      });
+
+      window.__originalStatic = document.getElementById('static').innerHTML;
+
+      // Mimic a framework updating existing text nodes in place.
+      const liveText = document.getElementById('live').firstChild;
+      const sentenceText = document.getElementById('sentence').firstChild;
+      let n = 1;
+      window.tick = () => {
+        n++;
+        liveText.nodeValue = `$${(10 * n).toFixed(2)}`;
+        sentenceText.nodeValue = `Cart total: $${(5 * n).toFixed(2)} for ${n} items`;
+      };
+      document.getElementById('addItem').onclick = () => {
+        const li = document.createElement('li');
+        li.textContent = `Item ${document.querySelectorAll('#list li').length + 1} — $9.99`;
+        document.getElementById('list').append(li);
+      };
+      document.querySelectorAll('[data-target]').forEach((b) => (b.onclick = () => setSettings({ targetCurrency: b.dataset.target })));
+      document.getElementById('toggle').onclick = () => setSettings({ enabled: !settings.enabled });
+    </script>
+    <script src="../src/shared.js"></script>
+    <script src="../src/content.js"></script>
+  </body>
+</html>

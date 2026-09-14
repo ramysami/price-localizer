@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Price Localizer</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="top">
+        <img src="../icons/icon48.png" alt="" class="logo" />
+        <div class="brand">
+          <h1>Price Localizer</h1>
+          <p class="sub" id="status">Converting prices</p>
+        </div>
+        <label class="switch" title="Turn conversion on or off everywhere">
+          <input type="checkbox" id="enabled" />
+          <span class="slider"></span>
+        </label>
+      </header>
+
+      <section class="card">
+        <label for="target" class="label">Convert prices to</label>
+        <select id="target"></select>
+        <div class="rate" id="ratePreview">–</div>
+        <div class="meta">
+          <span id="rateMeta">Loading exchange rates…</span>
+          <button id="refresh" class="icon-btn" title="Fetch the latest exchange rates" aria-label="Refresh exchange rates">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+        <p class="error" id="rateError" hidden></p>
+      </section>
+
+      <section class="card site-row">
+        <div class="site-text">
+          <div class="site-name" id="siteName">This page</div>
+          <div class="hint" id="siteStats"></div>
+        </div>
+        <label class="switch small" title="Convert prices on this site">
+          <input type="checkbox" id="siteEnabled" />
+          <span class="slider"></span>
+        </label>
+      </section>
+
+      <section class="card settings">
+        <div class="row">
+          <label for="color">Highlight colour</label>
+          <div class="color-wrap">
+            <span class="sample" id="colorSample">EGP 1,250</span>
+            <input type="color" id="color" />
+          </div>
+        </div>
+        <div class="row">
+          <label for="display">Show currency as</label>
+          <select id="display"></select>
+        </div>
+        <div class="row">
+          <label for="dollar">A plain “$” means</label>
+          <select id="dollar"></select>
+        </div>
+        <label class="check"><input type="checkbox" id="roundWhole" /> Round to whole numbers</label>
+        <label class="check"><input type="checkbox" id="showTooltip" /> Show the original price on hover</label>
+      </section>
+    </main>
+    <script src="../src/shared.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
