@@ -69,6 +69,18 @@ assert.equal(detect('¥100', { tld: 'cn' })[0].from, 'CNY');
 assert.equal(detect('100 kr', { tld: 'se' })[0].from, 'SEK');
 assert.deepEqual(detect('100 kr', { tld: 'com' }), []);
 
+// Split-price fragments: what earns the (expensive) walk up the ancestors.
+for (const piece of ['$', '€', 'ج.م', 'US$', 'USD', 'kr', 'Rs.', 'LE', 'TL', '19', '99', '1,299',
+  '1 299', '٢٥٠', '19.', '$19', '19 €', 'US$1,299', 'LE 1,500']) {
+  assert.equal(PL.isPriceFragment(piece), true, `should be a price fragment: ${piece}`);
+}
+// A token matched as a substring turns half the page into currency; these must not.
+for (const word of ['TITLE', 'SUBTITLE', 'SALES', 'LEARN MORE', 'PROFILE', 'DELETE', 'COMPLETE', 'ARTICLES',
+  'FORMAT', 'kroner', 'skrill', 'Page 2', '4 left', '2 min read', 'Chapter 7', 'Aug 5', '99+', '(4)',
+  'Add to cart', 'constructor', '__proto__', 'hasOwnProperty']) {
+  assert.equal(PL.isPriceFragment(word), false, `should not be a price fragment: ${word}`);
+}
+
 // Formatting
 assert.match(PL.formatMoney(1234.5, 'EGP', { locale: 'en-US' }), /EGP\s1,234\.50/);
 assert.match(PL.formatMoney(1234.5, 'EGP', { locale: 'en-US', display: 'narrowSymbol' }), /E£1,234\.50/);

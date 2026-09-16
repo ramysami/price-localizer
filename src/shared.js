@@ -86,9 +86,12 @@
   const TOKEN = `(?:${allTokens.map(escapeRe).join('|')})`;
   const CODE = `(?:${CODES.join('|')})`;
 
-  const D = '[0-9\\u0660-\\u0669]';
-  const GROUP_SEP = "[,.'\\u2019\\u00A0\\u202F\\u2009\\u066C]";
-  const DEC_SEP = '[.,\\u066B]';
+  const DIGIT_CHARS = '0-9\\u0660-\\u0669';
+  const GROUP_CHARS = ",.'\\u2019\\u00A0\\u202F\\u2009\\u066C";
+  const DEC_CHARS = '.,\\u066B';
+  const D = `[${DIGIT_CHARS}]`;
+  const GROUP_SEP = `[${GROUP_CHARS}]`;
+  const DEC_SEP = `[${DEC_CHARS}]`;
   // 1,234.56 | 1.234,56 | 1 234,56 | 2,49,999 | 1234.5 | 12,99 | 3.459 | 0.00012 — never a partial number.
   const NUMBER =
     `(?:${D}{1,3}(?:,${D}{2})+,${D}{3}(?:\\.${D}{1,2})?` +
@@ -109,7 +112,30 @@
   const PRICE_RE = new RegExp(PRICE_SOURCE, 'gu');
   const FULL_PRICE_RE = new RegExp(`^${PRICE_SOURCE}$`, 'u');
   const HAS_DIGIT_RE = /[0-9٠-٩]/;
-  const HAS_TOKEN_RE = new RegExp(TOKEN, 'u');
+  // Just digits and the separators that appear inside a number: "19", "1,299", "99", "19."
+  // One flat character class, so the test stays linear in the length of the text.
+  const NUMERIC_RE = new RegExp(`^[${DIGIT_CHARS}${GROUP_CHARS}${DEC_CHARS}\\s]+$`, 'u');
+  const LEADING_TOKEN_RE = new RegExp(`^${TOKEN}`, 'u');
+  const TRAILING_TOKEN_RE = new RegExp(`${TOKEN}$`, 'u');
+  // hasOwn, not `in`: "constructor" and friends are not currencies.
+  const isCurrencyToken = (text) => Object.hasOwn(SYMBOLS, text) || Object.hasOwn(AMBIGUOUS, text);
+
+  /**
+   * Could this text be one piece of a price split across elements — "$", "19", "99", "$19",
+   * "99 €"? Every test is anchored, because a token matched as a substring makes currency out
+   * of "TITLE" (TL), "SALES" (LE), "FORMAT" (RM) and "kroner" (kr), which is most of a page.
+   * Cheapest tests first: ordinary words lose on the two lookups and a one-character regex.
+   */
+  function isPriceFragment(text) {
+    if (isCurrencyToken(text)) return true;
+    if (!HAS_DIGIT_RE.test(text)) return false;
+    if (NUMERIC_RE.test(text)) return true;
+    // A token on one end and a number on the other, as in "$19" or "99 €".
+    const head = text.replace(LEADING_TOKEN_RE, '');
+    if (head !== text && NUMERIC_RE.test(head)) return true;
+    const tail = text.replace(TRAILING_TOKEN_RE, '');
+    return tail !== text && NUMERIC_RE.test(tail);
+  }
 
   // ---- Parsing ------------------------------------------------------------
 
@@ -233,7 +259,7 @@
     PRICE_RE,
     FULL_PRICE_RE,
     HAS_DIGIT_RE,
-    HAS_TOKEN_RE,
+    isPriceFragment,
     parseAmount,
     countryTld,
     resolveCurrency,

@@ -26,6 +26,9 @@
   const MAX_OWNER_TEXT = 48;
   const MAX_TEXT_NODE = 20000;
   const MAX_CHURN = 25; // stop fighting a page that keeps rewriting the same price
+  const SLICE_MS = 8; // main-thread budget for one conversion slice, comfortably inside a frame
+  const SLICE_CHECK = 32; // how many nodes to convert between looks at the clock
+  const SLICE_TIMEOUT = 50; // a busy page must not starve the conversions still waiting
   const OBSERVE_OPTS = { childList: true, subtree: true, characterData: true };
 
   let settings = { ...PL.DEFAULT_SETTINGS };
@@ -38,9 +41,14 @@
   const ownerState = new WeakMap(); // element -> info needed to restore it
   const splitState = new WeakMap(); // Text -> { original, inserted: Node[] }
   const spanOrigin = new WeakMap(); // our <span> -> the Text it was split from
-  const churn = new WeakMap(); // node -> number of times the page overwrote our conversion
+  let churn = new WeakMap(); // node -> number of times the page overwrote our conversion
+  let abandoned = new WeakSet(); // nodes we stopped converting because the page kept winning
   const ours = new WeakSet(); // nodes we created
   const roots = new Set([document]); // document + open shadow roots we've found
+  let queued = []; // text nodes collected but not yet converted
+  let queuedAt = 0; // how far through `queued` we have got
+  let sliceScheduled = false;
+  let sliceStarved = false; // idle time never came; fall back to plain short tasks
   const observer = new MutationObserver(onMutations);
 
   // ---- Conversion ---------------------------------------------------------
@@ -82,14 +90,14 @@
     return !el || Boolean(el.closest(SKIP_SELECTOR));
   }
 
-  function scan(root) {
+  /** Walk `root`, adding the text nodes under it to the conversion queue. Walking is cheap. */
+  function collect(root) {
     if (root.nodeType === Node.TEXT_NODE) {
-      processText(root);
+      queued.push(root);
       return;
     }
     const shadows = [];
     if (root.shadowRoot) shadows.push(root.shadowRoot);
-    const texts = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
       acceptNode(n) {
         if (n.nodeType === Node.TEXT_NODE) return NodeFilter.FILTER_ACCEPT;
@@ -98,21 +106,73 @@
         return NodeFilter.FILTER_SKIP;
       },
     });
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) texts.push(n);
-    texts.forEach(processText);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) queued.push(n);
     for (const shadow of shadows) {
       roots.add(shadow);
-      scan(shadow);
+      collect(shadow);
     }
+  }
+
+  /**
+   * Convert as much of the queue as this task can afford. Converting a whole document is far
+   * more work than fits in one frame, so callers run a slice now and leave the rest to
+   * `scheduleSlice`. Every slice does at least SLICE_CHECK nodes, so progress is guaranteed.
+   * Callers are responsible for running this with the observer detached.
+   */
+  function processQueued(deadline) {
+    const started = performance.now();
+    // A hidden tab paints no frames, so there is no jank to avoid and idle callbacks are
+    // throttled anyway: finish the queue in one go rather than trickle for minutes.
+    if (document.hidden) {
+      while (queuedAt < queued.length) processText(queued[queuedAt++]);
+    } else {
+      // Spend the frame's real idle time when we were given some; a slice we were forced into
+      // (idle callback timed out, or the page has none) falls back to a fixed budget.
+      const idle = deadline && !deadline.didTimeout ? deadline : null;
+      while (queuedAt < queued.length) {
+        processText(queued[queuedAt++]);
+        if (queuedAt % SLICE_CHECK !== 0) continue;
+        if (idle ? idle.timeRemaining() <= 1 : performance.now() - started >= SLICE_MS) break;
+      }
+    }
+    if (queuedAt >= queued.length) {
+      queued = [];
+      queuedAt = 0;
+    }
+  }
+
+  function scheduleSlice() {
+    if (sliceScheduled || !queued.length) return;
+    sliceScheduled = true;
+    // Idle time is the polite way to finish. But a page that never goes idle — or a browser
+    // that throttles idle callbacks — must not be left with half its prices converted, so
+    // once we have been forced into a slice we keep going with ordinary short tasks instead.
+    if (sliceStarved || typeof requestIdleCallback !== 'function') setTimeout(runSlice, 0);
+    else requestIdleCallback(runSlice, { timeout: SLICE_TIMEOUT });
+  }
+
+  function runSlice(deadline) {
+    sliceScheduled = false;
+    if (deadline && deadline.didTimeout) sliceStarved = true;
+    if (!active) {
+      queued = [];
+      queuedAt = 0;
+      return;
+    }
+    withoutObserver(() => processQueued(deadline));
+    scheduleSlice();
   }
 
   function processText(node) {
     const text = node.nodeValue;
     if (!text || text.length > MAX_TEXT_NODE || written.has(node) || ours.has(node) || !node.isConnected) return;
+    if (abandoned.has(node)) return;
 
     const hasDigit = PL.HAS_DIGIT_RE.test(text);
     const trimmed = text.trim().replace(/\s+/g, ' ');
-    if (trimmed.length <= 24 && (hasDigit || PL.HAS_TOKEN_RE.test(trimmed)) && convertSplitPrice(node, trimmed)) return;
+    // Climbing ancestors is the most expensive thing we do, so only spend it on text that
+    // could actually be one piece of a split price. Ordinary words are not pieces of a price.
+    if (trimmed.length <= 24 && PL.isPriceFragment(trimmed) && convertSplitPrice(node, trimmed)) return;
     if (!hasDigit) return;
 
     const hits = [];
@@ -136,7 +196,7 @@
     let el = node.parentElement;
     for (let i = 0; el && i < MAX_CLIMB; i++, el = el.parentElement) {
       if (el === document.body || el === document.documentElement || SKIP_TAGS.has(el.localName)) return false;
-      if (el.hasAttribute(OWNER_ATTR)) return true;
+      if (el.hasAttribute(OWNER_ATTR) || abandoned.has(el)) return true;
       const info = collectText(el);
       if (!info) return false; // too long, or already converted — ancestors will be too
       if (info.text === ownText) continue;
@@ -193,6 +253,7 @@
   }
 
   function rewriteOwner(el, nodes, conv) {
+    if (abandoned.has(el)) return;
     // Put the converted value where the most digits were (the "19" rather than the "$").
     let target = nodes[0];
     let most = -1;
@@ -328,7 +389,12 @@
   function pageOverwrote(node) {
     const count = (churn.get(node) || 0) + 1;
     churn.set(node, count);
-    return count <= MAX_CHURN;
+    if (count <= MAX_CHURN) return true;
+    // Giving the price back clears `written` and OWNER_ATTR, so on the page's next write the
+    // node looks like content we have never seen and we would start the fight over. The count
+    // alone can't stop that — only a mark that survives the release can.
+    abandoned.add(node);
+    return false;
   }
 
   function onMutations(records) {
@@ -364,8 +430,11 @@
         }
         for (const n of r.addedNodes) if (!ours.has(n)) queue.add(n);
       }
-      for (const n of queue) if (n.isConnected && !isSkipped(n)) scan(n);
+      for (const n of queue) if (n.isConnected && !isSkipped(n)) collect(n);
+      processQueued();
     });
+    // Anything an oversized batch left over rides along with the page's idle time.
+    scheduleSlice();
   }
 
   // ---- Lifecycle ----------------------------------------------------------
@@ -392,15 +461,26 @@
       formatOpts: { display: settings.currencyDisplay, round: settings.roundWhole, locale: navigator.language },
     };
     active = true;
-    withoutObserver(() => scan(document.body || document.documentElement));
+    withoutObserver(() => {
+      collect(document.body || document.documentElement);
+      processQueued();
+    });
+    scheduleSlice();
   }
 
   function stop() {
     if (!active) return;
     active = false;
+    queued = [];
+    queuedAt = 0;
+    sliceStarved = false;
     observer.takeRecords();
     observer.disconnect();
     revertAll();
+    // A restart means the settings or the rates changed, so prices we gave up on deserve
+    // another attempt — the page may not fight us over the new value.
+    churn = new WeakMap();
+    abandoned = new WeakSet();
   }
 
   function restart() {
